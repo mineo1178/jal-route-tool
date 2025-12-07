@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>JAL乗り継ぎプランナー</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header-inner">
+      <h1>JAL乗り継ぎプランナー</h1>
+      <p>運行計画CSVを読み込み、乗り継ぎルートを手動作成／自動提案するツール</p>
+    </div>
+  </header>
+
+  <div class="container">
+
+    <!-- ① CSV読み込み -->
+    <section class="card">
+      <div class="card-title-row">
+        <h2>① 運行計画CSVの読み込み</h2>
+        <span class="badge">必須</span>
+      </div>
+
+      <p class="hint">
+        CSVファイルを選択してください。列名や並び順が違っても自動推定します。<br />
+        重要なのは「出発空港／出発時刻／到着空港／到着時刻」です。
+      </p>
+
+      <div class="file-input-row">
+        <label class="file-label">
+          ファイルを選択
+          <input type="file" id="csvFileInput" accept=".csv" />
+        </label>
+        <span id="fileName" class="file-name">CSVファイルが選択されていません</span>
+      </div>
+
+      <div class="summary">
+        <span>読み込み便数：<strong id="flightCount">0</strong> 件</span>
+        <span id="loadStatus" class="status status-muted">まずはCSVを読み込んでください</span>
+      </div>
+
+      <!-- ★列推定の表示（nullエラー防止のため必須） -->
+      <div id="columnGuessInfo" class="muted small" style="text-align:left;margin-top:6px;"></div>
+    </section>
+
+
+    <!-- ② 手動プラン -->
+    <section class="card">
+      <div class="card-title-row">
+        <h2>② 手動プラン（保存した便の一覧）</h2>
+        <span class="badge badge-optional">任意</span>
+      </div>
+
+      <p class="hint">
+        ④の検索結果から「＋保存」で追加されます。Markdownでコピー可能。
+      </p>
+
+      <div class="button-row">
+        <button id="copyScheduleBtn" type="button" class="btn ghost">📋 Markdownコピー</button>
+        <button id="clearSavedBtn" type="button" class="btn ghost">🗑 全削除</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>便名</th>
+              <th>出発空港</th>
+              <th>出発</th>
+              <th>到着空港</th>
+              <th>到着</th>
+              <th>前便から</th>
+            </tr>
+          </thead>
+          <tbody id="savedFlightsBody">
+            <tr>
+              <td colspan="7" class="muted">
+                まだ便が保存されていません。④の検索結果から「＋保存」で追加できます。
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+
+    <!-- ③ おすすめ + ④ 検索 -->
+    <div class="flex-row">
+
+      <!-- ③ おすすめ乗り継ぎ -->
+      <section class="card flex-col">
+        <div class="card-title-row">
+          <h2>③ おすすめ乗り継ぎプラン（最大5件）</h2>
+          <span class="badge badge-auto">自動提案</span>
+        </div>
+
+        <p class="hint">
+          出発空港と時間帯を指定すると、フライト回数が多いルートを最大5件提示します。<br />
+          乗り継ぎ時間は <strong>20〜240分</strong> の範囲で計算します。
+        </p>
+
+        <div class="form-grid">
+          <label>
+            出発空港
+            <select id="startAirportSelect">
+              <option value="">（CSV読み込み後に選択可能）</option>
+            </select>
+          </label>
+          <label>
+            開始時刻
+            <input id="startTimeInput" type="time" value="05:00" />
+          </label>
+          <label>
+            終了時刻
+            <input id="endTimeInput" type="time" value="23:59" />
+          </label>
+          <label>
+            最大乗継回数（任意）
+            <input id="maxConnectionsInput" type="number" min="0" max="7" placeholder="未指定なら自動" />
+          </label>
+          <label>
+            最終到着空港（任意）
+            <select id="endAirportSelect">
+              <option value="">（指定なし）</option>
+            </select>
+          </label>
+        </div>
+
+        <details class="transit-details">
+          <summary>含めたい／含めたくない経由空港を指定（任意・複数選択可）</summary>
+
+          <div class="legend-row">
+            <span class="legend include">青：含めたい</span>
+            <span class="legend exclude">赤：含めたくない</span>
+            <span class="legend none">灰：指定なし</span>
+          </div>
+
+          <div class="transit-control-row">
+            <button id="clearTransitBtn" type="button" class="btn ghost btn-xs">
+              選択全解除
+            </button>
+          </div>
+
+          <div id="transitAirportsBox" class="transit-box transit-chips">
+            CSV読み込み後に一覧が表示されます。
+          </div>
+        </details>
+
+        <div class="button-row">
+          <button id="generatePlansBtn" type="button" class="btn primary">
+            ✨ おすすめプラン生成
+          </button>
+        </div>
+
+        <!-- 計算インジケーター -->
+        <div id="loadingIndicator" class="loading hidden">
+          🔄 計算中…（数秒かかる場合があります）
+        </div>
+
+        <!-- 進捗パネル（％ / 残量の目安 / 経過） -->
+        <div id="progressPanel" class="progress-panel hidden">
+          <div class="progress-row">
+            <div class="progress-msg">探索中…</div>
+            <div class="progress-percent"><span id="progressPercent">0</span>%</div>
+          </div>
+
+          <div class="progress-bar-outer">
+            <div id="progressBarInner" class="progress-bar-inner"></div>
+          </div>
+
+          <div class="progress-stats">
+            <span>探索済みルート: <b id="progressRoutes">0</b></span>
+            <span>探索中ノード: <b id="progressNodes">0</b></span>
+            <span>経過: <b id="progressElapsed">0.0</b>s</span>
+          </div>
+        </div>
+
+        <div id="plansInfo" class="plans-info muted small"></div>
+        <div id="plansContainer" class="plans-container">
+          <p class="muted small">まずはCSVを読み込み、出発空港を選んでください。</p>
+        </div>
+      </section>
+
+
+      <!-- ④ フライト検索 -->
+      <section class="card flex-col">
+        <div class="card-title-row">
+          <h2>④ フライト検索（単便＆乗り継ぎ候補）</h2>
+          <span class="badge badge-search">検索</span>
+        </div>
+
+        <p class="hint">
+          出発地・到着地・時間帯で便を検索し、「＋保存」で②に追加。<br />
+          「↪乗継候補」で、その便の次の接続候補のみを絞り込みます。
+        </p>
+
+        <div class="form-grid">
+          <label>
+            出発空港
+            <select id="originSelect">
+              <option value="">（すべて）</option>
+            </select>
+          </label>
+          <label>
+            到着空港
+            <select id="destSelect">
+              <option value="">（すべて）</option>
+            </select>
+          </label>
+          <label>
+            出発時刻（From）
+            <input id="depFromInput" type="time" />
+          </label>
+          <label>
+            出発時刻（To）
+            <input id="depToInput" type="time" />
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="searchBtn" type="button" class="btn primary">検索</button>
+          <button id="resetBtn" type="button" class="btn ghost">条件クリア</button>
+          <button id="backBtn" type="button" class="btn ghost">戻る</button>
+        </div>
+
+        <div id="searchInfo" class="muted small search-info"></div>
+
+        <div class="table-wrapper small">
+          <table>
+            <thead>
+              <tr>
+                <th>便名</th>
+                <th>出発空港</th>
+                <th>出発</th>
+                <th>到着空港</th>
+                <th>到着</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="searchResultsBody">
+              <tr>
+                <td colspan="6" class="muted">
+                  まずCSVを読み込み、「検索」を押してください。
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
